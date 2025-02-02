@@ -18,8 +18,8 @@ app.use(express.urlencoded({ extended: true }));
 // 这样，客户端可以通过 "/covers/文件名" 直接访问存储在 "public/covers" 目录下的封面图片
 app.use('/covers', express.static(path.join(__dirname, 'public', 'covers')));
 
-const COMICS_DIR = path.join(__dirname, 'comics');
-const DB_FILE = path.join(__dirname, 'comics.json');
+const COMICS_DIR = path.join(__dirname, 'comics');  // 相对路径
+const DB_FILE = path.join(__dirname, 'comics.json'); // 相对路径
 
 // 支持的图片格式
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
@@ -43,16 +43,38 @@ async function initialize() {
 
 // 扫描漫画目录
 async function scanComicsDirectory() {
+  // 获取当前漫画目录中的所有文件
   const files = await fsp.readdir(COMICS_DIR);
-  const zipFiles = files.filter(file => path.extname(file).toLowerCase() === '.zip');
+  const zipFiles = files.filter(file => path.extname(file).toLowerCase() === '.zip'); // 只关注 ZIP 文件
 
+  // 获取当前漫画目录中的所有文件名
+  const currentComicsFiles = new Set(zipFiles);
+
+  // 获取当前数据库中的所有漫画文件名
+  const existingComicsFiles = new Set(comicsDB.map(c => c.fileName));
+
+  // 查找新增的漫画文件并处理
   for (const file of zipFiles) {
-    const existing = comicsDB.find(c => c.fileName === file);
-    if (!existing) {
-      await processNewComic(file);
+    if (!existingComicsFiles.has(file)) {
+      // 如果数据库中没有该文件，则处理它作为新漫画
+      console.log(`[NEW] 发现新漫画文件：${file}`);
+      await processNewComic(file); // 处理新漫画
     }
   }
+
+  // 查找被删除的漫画文件并移除
+  for (const comic of comicsDB) {
+    if (!currentComicsFiles.has(comic.fileName)) {
+      // 如果漫画文件在目录中不存在，则删除它
+      console.log(`[REMOVED] 漫画文件已删除：${comic.fileName}`);
+      comicsDB = comicsDB.filter(c => c.fileName !== comic.fileName); // 从数据库中移除
+    }
+  }
+
+  // 更新数据库文件
+  await fsp.writeFile(DB_FILE, JSON.stringify(comicsDB, null, 2));
 }
+
 
 // 处理新漫画
 async function processNewComic(fileName) {
@@ -66,7 +88,10 @@ async function processNewComic(fileName) {
     .filter(entry => IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  if (images.length === 0) return;
+  if (images.length === 0) {
+    console.log('压缩包已损坏');
+    return;
+  }
 
   // 读取封面图片
   const coverImage = images[0];
@@ -96,11 +121,11 @@ async function processNewComic(fileName) {
 // 通过 ID 获取漫画的流式传输
 app.get('/api/comic/:id/page/:pageNumber', async (req, res) => {
   console.log('[1] 收到请求参数:', req.params);
-  
+
   try {
     const { id, pageNumber } = req.params;
     const pageIndex = parseInt(pageNumber, 10);
-    
+
     // 查找漫画记录
     const comic = comicsDB.find(c => c.id === id);
     console.log('[2] 找到的漫画记录:', comic ? comic.id : '未找到');
@@ -123,7 +148,7 @@ app.get('/api/comic/:id/page/:pageNumber', async (req, res) => {
       .filter(entry => !entry.isDirectory)
       .filter(entry => IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
       .sort((a, b) => a.name.localeCompare(b.name));
-    
+
     console.log('[5] 有效图片数量:', images.length);
     console.log('[6] 请求页码:', pageIndex);
 
@@ -153,9 +178,9 @@ app.get('/api/comic/:id/page/:pageNumber', async (req, res) => {
       '.gif': 'image/gif',
       '.webp': 'image/webp'
     }[ext] || 'application/octet-stream';
-    
+
     console.log('[9] 设置的Content-Type:', mimeType);
-    
+
     // 发送响应
     res.setHeader('Content-Type', mimeType);
     res.send(imageData); // 注意这里不再使用 Buffer.from
@@ -165,7 +190,6 @@ app.get('/api/comic/:id/page/:pageNumber', async (req, res) => {
     res.status(500).send('Internal Server Error');
   }
 });
-
 
 // Express路由
 app.get('/api/comics', async (req, res) => {
